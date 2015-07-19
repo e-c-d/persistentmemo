@@ -17,13 +17,13 @@ class RefBox(object):
         return repr(self.value)
 
 class _Pickle_Hash(object):
-    """This is only used to mark hash values in hash_serialize"""
+    """This is only used to mark already-hashed objects in hash_serialize"""
 class _Pickle_Function(object):
     """This is only used to mark functions in hash_serialize"""
 class _Pickle_Code(object):
     """This is only used to mark code objects in hash_serialize"""
 class _Pickle_FDeps(object):
-    """This is only used to mark code objects in hash_serialize"""
+    """This is only used to mark FDeps objects in hash_serialize"""
 
 class HashIO(object):
     def __init__(self, h):
