@@ -2,7 +2,48 @@ import functools, weakref, io, pickle, hashlib, copyreg, inspect
 import unittest, warnings
 from types import FunctionType, CodeType
 
-class RefBox(object):
+__doc__ = """Persistent memoization
+
+Example usage:
+
+from persistentmemo import PersistentMemo, PersistentMemoStoreRedis, fdeps
+
+memo = PersistentMemo()
+memoize = memo.memoize
+
+PI = 3.14
+
+@fdeps(PI)
+def foo(x, y):
+    return x * (y - PI)
+
+@memoize()
+@fdeps(foo)
+def bar(z):
+    return foo(z, z+1) + 2
+
+# mandatory fibonacci example
+@memoize()
+def fibs(n):
+    if n==0 or n==1: return n
+    return fibs(n-1) + fibs(n-2)
+
+def init_persistentmemo():
+    import redis
+    redis_pool = redis.ConnectionPool(host='127.0.0.1',port=6379)
+    redis_obj = redis.StrictRedis(connection_pool=redis_pool)
+    memo.store = PersistentMemoStoreRedis(redis_obj)
+
+def main():
+    init_persistentmemo()
+    # or you could just do "memo.store = {}"
+    print(bar(4), bar(4))
+    print(fibs(300))
+"""
+__all__ = ['PersistentMemo', 'fdeps',
+           'PersistentMemoStoreRedis']
+
+class _RefBox(object):
     #__slots__ = ['value','__weakref__']
     __slots__ = ['value']
     def __init__(self, value):
@@ -25,7 +66,7 @@ class _Pickle_Code(object):
 class _Pickle_FDeps(object):
     """This is only used to mark FDeps objects in hash_serialize"""
 
-class HashIO(object):
+class _HashIO(object):
     def __init__(self, h):
         self.h = h
     def write(self, s):
@@ -113,7 +154,7 @@ self.store must implement __getitem__ and __setitem__"""
                           'co_name','co_names','co_nlocals','co_stacksize',
                           'co_varnames')],))
             def persistent_id(self, obj):
-                obj_refbox = RefBox(obj)
+                obj_refbox = _RefBox(obj)
                 try:
                     cached_hash = self.pm._cached_hash[obj_refbox]
                 except KeyError:
@@ -121,17 +162,20 @@ self.store must implement __getitem__ and __setitem__"""
                         self.pm.set_readonly(obj)
                         cached_hash = self.pm._cached_hash[obj_refbox]
                     else:
-                        return None
-                return (_Pickle_Hash, cached_hash)
+                        cached_hash = None
+                if cached_hash is None:
+                    return None
+                else:
+                    return (_Pickle_Hash, cached_hash)
         p = HashPickler(file=file)
         p.dump(obj)
     def hash(self, obj):
         try:
-            return self._cached_hash[RefBox(obj)]
+            return self._cached_hash[_RefBox(obj)]
         except KeyError:
             pass
         h = hashlib.md5()
-        self.hash_serialize(obj, file=HashIO(h))
+        self.hash_serialize(obj, file=_HashIO(h))
         return h.digest()
     def serialize(self, obj):
         """this is used for function results; you may override this"""
@@ -141,10 +185,10 @@ self.store must implement __getitem__ and __setitem__"""
         return pickle.loads(buf)
     def set_readonly(self, obj, readonly=True):
         if readonly:
-            self._cached_hash[RefBox(obj)] = None
-            self._cached_hash[RefBox(obj)] = self.hash(obj)
+            self._cached_hash[_RefBox(obj)] = None
+            self._cached_hash[_RefBox(obj)] = self.hash(obj)
         else:
-            self._cached_hash.pop(RefBox(obj), None)
+            self._cached_hash.pop(_RefBox(obj), None)
         return obj
     def memoize(self):
         def wrapper(func):
@@ -167,7 +211,7 @@ self.store must implement __getitem__ and __setitem__"""
                 return result
             return wrapped
         return wrapper
-
+    
 class PersistentDemoTest(unittest.TestCase):
     def test_all(self):
         m = PersistentMemo()
