@@ -1,7 +1,8 @@
 from setuptools import setup
 pkg = "persistentmemo"
-setup(name         =  pkg,
-      version      = "1.0.0",
+ver = "1.0.0"
+setup(name         = pkg,
+      version      = ver,
       description  = "Persistent memoization library",
       author       = "Eduard Christian Dumitrescu",
       license      = "MIT",

@@ -1,6 +1,7 @@
 import functools, weakref, io, pickle, hashlib, copyreg, inspect
 import warnings
 from types import FunctionType, CodeType
+from ._version import version as __version__
 
 __doc__ = """Persistent memoization
 
