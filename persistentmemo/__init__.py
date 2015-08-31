@@ -110,65 +110,67 @@ class PersistentMemoStoreRedis(object):
     def __setitem__(self, key, value):
         self._redis.set(self._prefix+key, value)
 
+class HashPickler(pickle._Pickler):
+    def __init__(self, persistentmemo, *args, **kwargs):
+        self.pm = persistentmemo
+        self.dispatch = self.dispatch.copy()
+        dispatch_table = copyreg.dispatch_table.copy()
+        dispatch_table[dict] = self.reduce_dict
+        dispatch_table[set] = self.reduce_set
+        dispatch_table[frozenset] = self.reduce_set
+        dispatch_table[CodeType] = self.reduce_code
+        dispatch_table[FunctionType] = self.reduce_function
+        for k in dispatch_table:
+            self.dispatch.pop(k, None)
+        self.dispatch_table = dispatch_table
+        super().__init__(*args, **kwargs)
+    @staticmethod
+    def reduce_dict(obj):
+        return (type(obj), (), None, None,
+                sorted(obj.items()))
+    @staticmethod
+    def reduce_set(obj):
+        return (type(obj), (), None,
+                sorted(obj))
+    @staticmethod
+    def reduce_function(obj):
+        return (_Pickle_Function,
+                (obj.__code__,
+                 getattr(obj,'__wrapped__', None)))
+    @staticmethod
+    def reduce_code(obj):
+        return (_Pickle_Code,
+                ([getattr(obj,k) for k in
+                 ('co_argcount','co_cellvars','co_code','co_consts',
+                  'co_flags','co_freevars','co_kwonlyargcount',
+                  'co_name','co_names','co_nlocals','co_stacksize',
+                  'co_varnames')],))
+    def persistent_id(self, obj):
+        obj_refbox = _RefBox(obj)
+        try:
+            cached_hash = self.pm._cached_hash[obj_refbox]
+        except KeyError:
+            if getattr(obj, '__persistentmemo_readonly__', False):
+                self.pm.set_readonly(obj)
+                cached_hash = self.pm._cached_hash[obj_refbox]
+            else:
+                cached_hash = None
+        if cached_hash is None:
+            return None
+        else:
+            return (_Pickle_Hash, cached_hash)
+
 class PersistentMemo(object):
     """persistent memoization
 self.store must implement __getitem__ and __setitem__"""
     _redis = None
     store = None
+    hashpickler_class = HashPickler
     def __init__(self):
         #self._cached_hash = weakref.WeakKeyDictionary()
         self._cached_hash = {}
     def hash_serialize(self, obj, file):
-        class HashPickler(pickle._Pickler):
-            pm = self
-            def __init__(self, *args, **kwargs):
-                self.dispatch = self.dispatch.copy()
-                dispatch_table = copyreg.dispatch_table.copy()
-                dispatch_table[dict] = self.reduce_dict
-                dispatch_table[set] = self.reduce_set
-                dispatch_table[frozenset] = self.reduce_set
-                dispatch_table[CodeType] = self.reduce_code
-                dispatch_table[FunctionType] = self.reduce_function
-                for k in dispatch_table:
-                    self.dispatch.pop(k, None)
-                self.dispatch_table = dispatch_table
-                super().__init__(*args, **kwargs)
-            @staticmethod
-            def reduce_dict(obj):
-                return (type(obj), (), None, None,
-                        sorted(obj.items()))
-            @staticmethod
-            def reduce_set(obj):
-                return (type(obj), (), None,
-                        sorted(obj))
-            @staticmethod
-            def reduce_function(obj):
-                return (_Pickle_Function,
-                        (obj.__code__,
-                         getattr(obj,'__wrapped__', None)))
-            @staticmethod
-            def reduce_code(obj):
-                return (_Pickle_Code,
-                        ([getattr(obj,k) for k in
-                         ('co_argcount','co_cellvars','co_code','co_consts',
-                          'co_flags','co_freevars','co_kwonlyargcount',
-                          'co_name','co_names','co_nlocals','co_stacksize',
-                          'co_varnames')],))
-            def persistent_id(self, obj):
-                obj_refbox = _RefBox(obj)
-                try:
-                    cached_hash = self.pm._cached_hash[obj_refbox]
-                except KeyError:
-                    if getattr(obj, '__persistentmemo_readonly__', False):
-                        self.pm.set_readonly(obj)
-                        cached_hash = self.pm._cached_hash[obj_refbox]
-                    else:
-                        cached_hash = None
-                if cached_hash is None:
-                    return None
-                else:
-                    return (_Pickle_Hash, cached_hash)
-        p = HashPickler(file=file)
+        p = self.hashpickler_class(file=file, persistentmemo=self)
         p.dump(obj)
     def hash(self, obj):
         try:
@@ -184,10 +186,11 @@ self.store must implement __getitem__ and __setitem__"""
     def deserialize(self, buf):
         """this is used for function results; you may override this"""
         return pickle.loads(buf)
-    def set_readonly(self, obj, readonly=True):
+    def set_readonly(self, obj, readonly=True, hash_value=None):
         if readonly:
             self._cached_hash[_RefBox(obj)] = None
-            self._cached_hash[_RefBox(obj)] = self.hash(obj)
+            h = self.hash(obj) if hash_value is None else hash_value
+            self._cached_hash[_RefBox(obj)] = h
         else:
             self._cached_hash.pop(_RefBox(obj), None)
         return obj
